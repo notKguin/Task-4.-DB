@@ -1,0 +1,33 @@
+{% load recipe_extras %}
+
+{% for r in recipes %}
+  <tr>
+    {% for f in fields %}
+      <td>
+        {% if f.get_internal_type == "BooleanField" %}
+          {% if r|get_item:f.name %}Да{% else %}Нет{% endif %}
+        {% else %}
+          {{ r|get_item:f.name|linebreaksbr }}
+        {% endif %}
+      </td>
+    {% endfor %}
+
+    {% if view_from == 'db' %}
+      <td>
+        <a class="btn btn-sm btn-outline-primary" href="{% url 'db_edit' r.id %}">Редактировать</a>
+        <form method="post" action="{% url 'db_delete' r.id %}" style="display:inline-block" onsubmit="return confirm('Удалить запись?');">
+          {% csrf_token %}
+          <button class="btn btn-sm btn-outline-danger" type="submit">Удалить</button>
+        </form>
+      </td>
+    {% endif %}
+  </tr>
+{% endfor %}
+
+{% if not recipes %}
+  <tr>
+    <td colspan="{% if view_from == 'db' %}{{ fields|length|add:1 }}{% else %}{{ fields|length }}{% endif %}">
+      Нет данных.
+    </td>
+  </tr>
+{% endif %}

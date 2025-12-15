@@ -2,12 +2,16 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8">
-  <title>Рецепты XML</title>
+  <title>Рецепты</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <style>body { padding: 30px; }</style>
+  <style>
+    body { padding: 30px; }
+    .field-error { font-size: 0.875rem; }
+  </style>
 </head>
 <body>
 <div class="container">
+  {% load recipe_extras %}
   <h1 class="mb-4">Рецепты</h1>
 
   {% if message %}
@@ -15,27 +19,72 @@
   {% endif %}
 
   <!-- Форма добавления рецепта -->
-  <form method="post" class="mb-4">
+  <form method="post" class="mb-3">
     {% csrf_token %}
+
     {% for field in fields %}
       <div class="mb-2">
-        <label>{{ field.verbose_name }}:</label>
-        {% if field.get_internal_type == "TextField" %}
+        <label class="form-label">{{ field.verbose_name }}:</label>
+
+        {% if field.get_internal_type == "BooleanField" %}
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="{{ field.name }}" id="{{ field.name }}">
+            <label class="form-check-label" for="{{ field.name }}">Да</label>
+          </div>
+        {% elif field.get_internal_type == "TextField" %}
           <textarea name="{{ field.name }}" class="form-control"></textarea>
         {% else %}
           <input type="text" name="{{ field.name }}" class="form-control">
         {% endif %}
+
+        {% if errors and errors|get_item:field.name %}
+          <div class="text-danger field-error mt-1">{{ errors|get_item:field.name }}</div>
+        {% endif %}
       </div>
     {% endfor %}
-    <button type="submit" name="add_recipe" class="btn btn-primary">Сохранить рецепт</button>
+
+    <!-- ЕДИНЫЙ блок выбора: откуда показывать + куда сохранять -->
+    <div class="card mt-3">
+      <div class="card-body">
+        <div class="row g-3 align-items-end">
+          <div class="col-md-4">
+            <label class="form-label">Откуда показывать данные:</label>
+            <select name="view_from" id="view_from" class="form-select">
+              <option value="xml" {% if view_from == 'xml' %}selected{% endif %}>XML</option>
+              <option value="db"  {% if view_from == 'db' %}selected{% endif %}>БД</option>
+            </select>
+          </div>
+
+          <div class="col-md-4">
+            <label class="form-label">Куда сохранять введённые данные:</label>
+            <select name="save_to" id="save_to" class="form-select">
+              <option value="xml" {% if save_to == 'xml' %}selected{% endif %}>XML</option>
+              <option value="db"  {% if save_to == 'db' %}selected{% endif %}>БД</option>
+            </select>
+          </div>
+
+          <div class="col-md-4" id="dbSearchWrap" style="display:none;">
+            <label class="form-label">Поиск по данным БД:</label>
+            <input type="text" id="dbSearch" class="form-control" placeholder="Начните вводить...">
+            <div class="form-text">Поиск работает только при выводе данных из БД.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-3 d-flex gap-2">
+      <button type="submit" name="add_recipe" class="btn btn-primary">Сохранить рецепт</button>
+      <button type="button" id="applySources" class="btn btn-outline-secondary">Применить выбор</button>
+    </div>
   </form>
 
   <!-- Форма загрузки XML -->
   <form method="post" enctype="multipart/form-data" class="mb-4">
     {% csrf_token %}
     <div class="mb-2">
-      <label>Загрузить XML файл:</label>
+      <label class="form-label">Загрузить XML файл:</label>
       <input type="file" name="xml_file" class="form-control">
+      <div class="form-text">Импорт всегда добавляет данные в XML-хранилище.</div>
     </div>
     <button type="submit" name="upload_xml" class="btn btn-success">Импортировать XML</button>
   </form>
@@ -46,7 +95,7 @@
     <p><b>Файл XML отсутствует.</b></p>
   {% endif %}
 
-  <h3 class="mt-4">Список рецептов</h3>
+  <h3 class="mt-4">Список рецептов (источник: {% if view_from == 'db' %}БД{% else %}XML{% endif %})</h3>
   {% if recipes %}
     <table class="table table-bordered">
       <thead>
@@ -54,21 +103,73 @@
           {% for f in fields %}
             <th>{{ f.verbose_name }}</th>
           {% endfor %}
+          {% if view_from == 'db' %}
+            <th style="width: 160px;">Действия</th>
+          {% endif %}
         </tr>
       </thead>
-      <tbody>
-        {% for r in recipes %}
-          <tr>
-            {% for f in fields %}
-              <td>{{ r|get_item:f.name|linebreaksbr }}</td>
-            {% endfor %}
-          </tr>
-        {% endfor %}
+      <tbody id="recipesTbody">
+        {% include "recipes/_rows.html" %}
       </tbody>
     </table>
   {% else %}
     <p>Рецептов пока нет.</p>
   {% endif %}
+
 </div>
+
+<script>
+  (function () {
+    const viewFrom = document.getElementById('view_from');
+    const saveTo = document.getElementById('save_to');
+    const applyBtn = document.getElementById('applySources');
+    const searchWrap = document.getElementById('dbSearchWrap');
+    const searchInput = document.getElementById('dbSearch');
+    const tbody = document.getElementById('recipesTbody');
+
+    function toggleSearch() {
+      const isDb = (viewFrom.value === 'db');
+      searchWrap.style.display = isDb ? '' : 'none';
+      if (!isDb && searchInput) {
+        searchInput.value = '';
+      }
+    }
+
+    function applySources() {
+      const url = new URL(window.location.href);
+      url.searchParams.set('view_from', viewFrom.value);
+      url.searchParams.set('save_to', saveTo.value);
+      url.searchParams.delete('q');
+      window.location.href = url.toString();
+    }
+
+    let searchTimer = null;
+    function runDbSearch() {
+      if (viewFrom.value !== 'db') return;
+
+      const q = (searchInput.value || '').trim();
+      const url = new URL('{% url "ajax_db_search" %}', window.location.origin);
+      url.searchParams.set('q', q);
+
+      fetch(url.toString(), { method: 'GET', headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+        .then(r => r.text())
+        .then(html => { tbody.innerHTML = html; })
+        .catch(() => { /* тихо */ });
+    }
+
+    toggleSearch();
+    viewFrom.addEventListener('change', toggleSearch);
+
+    applyBtn.addEventListener('click', applySources);
+
+    if (searchInput) {
+      searchInput.addEventListener('input', function () {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(runDbSearch, 250);
+      });
+    }
+  })();
+</script>
+
 </body>
 </html>
